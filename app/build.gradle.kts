@@ -20,6 +20,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -35,12 +36,6 @@ android {
         jvmTarget = "11"
     }
 
-    sourceSets {
-    getByName("main") {
-        java.srcDirs("src/main/kotlin")
-    }
-}
-
     buildFeatures {
         compose = true
     }
@@ -50,45 +45,54 @@ android {
     }
 }
 
-
-
-// Файл: app/build.gradle.kts
-
 dependencies {
-    // --- Стандартные зависимости (остаются как есть) ---
     implementation("androidx.core:core-ktx:1.10.1")
     implementation("androidx.appcompat:appcompat:1.7.0-alpha01")
     implementation("com.google.android.material:material:1.10.0")
 
-    // --- Compose (ИСПРАВЛЕННЫЙ БЛОК) ---
-    // 1. Добавляем BOM. Он будет управлять версиями всех библиотек Compose.
+    // Compose BOM
     implementation(platform("androidx.compose:compose-bom:2024.05.00"))
-
-    // 2. Убираем версии из зависимостей ниже. BOM подставит их сам.
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-text")
+    implementation("androidx.compose.material:material-icons-extended:1.7.7")
 
+    // FFT библиотека
     implementation("com.github.wendykierp:JTransforms:3.1")
 
-    // --- TarsosDSP (остается как есть) ---
-    //implementation("be.tarsos.dsp:core:2.5")
-    //implementation("be.tarsos.dsp:jvm:2.5")
+    // Корутины
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // --- TARSOSDSP (ФИНАЛЬНЫЙ ВАРИАНТ) ---
-    //implementation("be.tarsos.dsp:jvm:2.5") // Основная библиотека
+    implementation("androidx.compose.runtime:runtime-livedata:1.6.8")
 
-    // ---> ЭТО САМАЯ ВАЖНАЯ СТРОКА <---
-    // Она добавляет недостающие классы, из-за которых был вылет
-    //implementation("com.github.axet:TarsosDSP-Android:2.4")
+    // Jetpack Compose
+    implementation("androidx.core:core-ktx:1.12.0")
+    // ...
 
-    // --- Тесты (остаются как есть) ---
+    // ExoPlayer (Media3)
+    implementation("androidx.media3:media3-exoplayer:1.2.0")
+    implementation("androidx.media3:media3-ui:1.2.0")
+
+    // Coroutine Lifecycle Scopes (для обновления UI из Visualizer)
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+
+    implementation(libs.androidx.media3.exoplayer)
+
+    implementation("androidx.media3:media3-effect:1.2.1")
+
+    // Тесты
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.05.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
-
 
 
 
