@@ -346,8 +346,10 @@ fun PitchRollDisplay(
     blocksProvider: () -> List<NoteBlock>,
     cameraCenterProvider: () -> Float,
     currentTimeMsProvider: () -> Long,
-    scrollOffsetMs: Long = 0L,   // >0 = user has scrolled back in time
+    scrollOffsetMs: Long = 0L,
     isPaused: Boolean = false,
+    ghostPointsProvider: (() -> List<GhostPoint>)? = null,
+    ghostOffsetMs: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer()
@@ -355,18 +357,14 @@ fun PitchRollDisplay(
     val playheadOffsetRight = 0.85f
     val path = remember { Path() }
 
-    // *** Canvas runs in DrawScope, which is NOT a Compose composition context.
-    // State reads inside the Canvas lambda do NOT register Compose subscriptions.
-    // We must read ALL state HERE (in the composable body) so that any change
-    // causes recomposition and therefore a redraw of the Canvas below.
-    // This includes cameraCenter (fixes: blocks not moving when octave changes)
-    // and currentTimeMs (fixes: blocks not advancing with playhead). ***
-    val history = historyProvider()
-    val blocks  = blocksProvider()
-    val cameraCenter    = cameraCenterProvider()
-    val currentTimeMs   = currentTimeMsProvider()   // frozen while paused, no scroll applied
-    @Suppress("UNUSED_VARIABLE") val _histSub = history.size
-    @Suppress("UNUSED_VARIABLE") val _blkSub  = blocks.size
+    val history     = historyProvider()
+    val blocks      = blocksProvider()
+    val ghostPoints = ghostPointsProvider?.invoke() ?: emptyList()
+    val cameraCenter  = cameraCenterProvider()
+    val currentTimeMs = currentTimeMsProvider()
+    @Suppress("UNUSED_VARIABLE") val _histSub  = history.size
+    @Suppress("UNUSED_VARIABLE") val _blkSub   = blocks.size
+    @Suppress("UNUSED_VARIABLE") val _ghostSub = ghostPoints.size
 
     Canvas(modifier = modifier) {
         val width = size.width
@@ -537,15 +535,14 @@ fun PitchRollDisplay(
         }
 
         // 5. Pitch curve
+        // timeDiffMin: lower bound for the time filter. When paused + scrolled back,
+        // allow points between effectiveTimeMs and currentTimeMs (they're visible
+        // right of the playhead). Declared here so ghost section (6) can reuse it.
+        val timeDiffMin = if (isPaused) -scrollOffsetMs else 0L
         clipRect(left = pianoWidth, top = 0f, right = rightClip, bottom = height) {
             path.reset()
             var hasMoved = false
             var previousPoint: PitchPoint? = null
-            // When paused and scrolled back, effectiveTimeMs < currentTimeMs.
-            // Points with timeMs in (effectiveTimeMs, currentTimeMs] have timeDiff < 0
-            // but are still on screen (between playheadX and playheadDrawX).
-            // Allow them by lowering the filter bound to -scrollOffsetMs.
-            val timeDiffMin = if (isPaused) -scrollOffsetMs else 0L
             for (point in history) {
                 if (point.freq <= 20.0) { previousPoint = null; continue }
                 val timeDiff = effectiveTimeMs - point.timeMs
@@ -573,6 +570,34 @@ fun PitchRollDisplay(
             end = Offset(pianoWidth, height),
             strokeWidth = 2f
         )
+
+        // 6. Ghost pitch curve (orange, semi-transparent — the "ghost racer")
+        if (ghostPoints.isNotEmpty()) {
+            clipRect(left = pianoWidth, top = 0f, right = rightClip, bottom = height) {
+                path.reset()
+                var hasMoved = false
+                var prevGhost: GhostPoint? = null
+                for (gp in ghostPoints) {
+                    val ghostTimeInView = gp.timeMs + ghostOffsetMs
+                    val tDiff: Long = effectiveTimeMs - ghostTimeInView
+                    if (tDiff !in timeDiffMin..PITCH_HISTORY_WINDOW_MS) { prevGhost = null; continue }
+                    val x = timeToX(ghostTimeInView)
+                    val y = midiToY(gp.midi)
+                    val jump = if (prevGhost != null) abs(gp.midi - prevGhost!!.midi) else 0f
+                    when {
+                        prevGhost == null || !hasMoved -> { path.moveTo(x, y); hasMoved = true }
+                        gp.timeMs - prevGhost!!.timeMs > NOTE_GAP_THRESHOLD_MS -> path.moveTo(x, y)
+                        jump > 8f -> path.moveTo(x, y)
+                        else -> path.lineTo(x, y)
+                    }
+                    prevGhost = gp
+                }
+                if (hasMoved) {
+                    drawPath(path, Color(0xCCFF9800),
+                        style = Stroke(2f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                }
+            }
+        }
     }
 }
 

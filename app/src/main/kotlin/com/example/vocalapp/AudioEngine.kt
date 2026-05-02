@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jtransforms.fft.DoubleFFT_1D
 import java.nio.ShortBuffer
 import java.util.concurrent.atomic.AtomicLong
@@ -854,6 +855,100 @@ class AudioEngine(
         val stableMidi = agreeing.average()
         smoothedFrequency = 440.0 * 2.0.pow((stableMidi - 69.0) / 12.0)
         return smoothedFrequency
+    }
+
+    /**
+     * Offline pitch extraction for the "ghost" overlay feature.
+     * Decodes the full audio file and runs pitch detection on every 40 ms frame.
+     * Returns a list of GhostPoints with timestamps starting from 0 ms.
+     * Runs on Dispatchers.IO, cancellable via coroutine scope.
+     *
+     * @param onProgress callback with 0..1 progress fraction
+     */
+    suspend fun extractGhostFromFile(
+        uri: Uri,
+        onProgress: (Float) -> Unit = {}
+    ): List<GhostPoint> = withContext(Dispatchers.IO) {
+        val result = mutableListOf<GhostPoint>()
+        val ex = MediaExtractor()
+        try {
+            try { ex.setDataSource(context, uri, null) }
+            catch (e: Exception) { Log.e(TAG, "Ghost extractor failed: ${e.message}"); return@withContext result }
+
+            var format: MediaFormat? = null
+            for (i in 0 until ex.trackCount) {
+                val f = ex.getTrackFormat(i)
+                if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                    ex.selectTrack(i); format = f; break
+                }
+            }
+            val fmt = format ?: return@withContext result
+
+            val sr       = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val ch       = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val durUs    = try { fmt.getLong(MediaFormat.KEY_DURATION) } catch (_: Exception) { -1L }
+            val mime     = fmt.getString(MediaFormat.KEY_MIME) ?: return@withContext result
+
+            val dec = try {
+                MediaCodec.createDecoderByType(mime).apply { configure(fmt, null, null, 0); start() }
+            } catch (e: Exception) { Log.e(TAG, "Ghost decoder failed: ${e.message}"); return@withContext result }
+
+            // Own pitch detector — does not share state with the live detector
+            val ghostDet   = PitchDetector(sr)
+            val frameSize  = (sr * 0.04f).toInt()   // 40 ms per detection frame
+            val monoFrame  = ShortArray(frameSize)
+            var bufPos     = 0
+            var frameTimeMs = 0L
+            val msPerFrame = frameSize * 1000L / sr
+            val info       = MediaCodec.BufferInfo()
+            var inputDone  = false
+
+            try {
+                while (isActive) {
+                    if (!inputDone) {
+                        val inIdx = dec.dequeueInputBuffer(DECODER_TIMEOUT_US)
+                        if (inIdx >= 0) {
+                            val buf = dec.getInputBuffer(inIdx)!!
+                            val sz = ex.readSampleData(buf, 0)
+                            if (sz > 0) { dec.queueInputBuffer(inIdx, 0, sz, ex.sampleTime, 0); ex.advance() }
+                            else { dec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
+                        }
+                    }
+                    val outIdx = dec.dequeueOutputBuffer(info, DECODER_TIMEOUT_US)
+                    if (outIdx >= 0) {
+                        val outBuf = dec.getOutputBuffer(outIdx)
+                        if (outBuf != null && info.size > 0) {
+                            val sb = outBuf.asShortBuffer()
+                            var i = 0
+                            while (i < info.size / 2) {
+                                monoFrame[bufPos++] = sb.get(i)
+                                i += ch
+                                if (bufPos >= frameSize) {
+                                    val raw = ghostDet.detect(monoFrame.copyOf()).toDouble()
+                                    if (raw > 30.0) {
+                                        val midi = (12.0 * ln(raw / 440.0) / ln(2.0) + 69.0).toFloat()
+                                        result.add(GhostPoint(frameTimeMs, midi))
+                                    }
+                                    frameTimeMs += msPerFrame
+                                    bufPos = 0
+                                    if (durUs > 0) onProgress((frameTimeMs * 1000f / durUs).coerceIn(0f, 1f))
+                                }
+                            }
+                        }
+                        try { dec.releaseOutputBuffer(outIdx, false) } catch (_: Exception) {}
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+                    } else if (inputDone) {
+                        kotlinx.coroutines.delay(2)
+                    }
+                }
+            } finally {
+                try { dec.stop() } catch (_: Exception) {}
+                try { dec.release() } catch (_: Exception) {}
+            }
+        } finally {
+            try { ex.release() } catch (_: Exception) {}
+        }
+        result
     }
 
     companion object {

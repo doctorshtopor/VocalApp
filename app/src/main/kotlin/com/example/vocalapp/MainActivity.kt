@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,7 +60,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material3.Text
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -261,6 +264,12 @@ private fun VocalAppRoot(
     var cameraCenter by remember { mutableFloatStateOf(60f) }       // C4
     var cameraCenterTarget by remember { mutableFloatStateOf(60f) }
 
+    // ----- Ghost ("ghost racer" reference pitch) -----------------------------------------------
+    var ghostPoints by remember { mutableStateOf<List<GhostPoint>>(emptyList()) }
+    var ghostOffsetMs by remember { mutableLongStateOf(0L) }
+    var isGhostLoading by remember { mutableStateOf(false) }
+    var ghostLoadProgress by remember { mutableFloatStateOf(0f) }
+
     // ----- Coroutine scope for button-triggered pager animations -------------------------
     val scope = rememberCoroutineScope()
     val filePicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -274,6 +283,22 @@ private fun VocalAppRoot(
             audioEngine.loadFile(uri)
             isPlayerPanelVisible = true
             lastInteractionTime = System.currentTimeMillis()
+        }
+    }
+
+    val ghostPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            isGhostLoading = true
+            ghostLoadProgress = 0f
+            scope.launch {
+                val pts = audioEngine.extractGhostFromFile(uri) { p -> ghostLoadProgress = p }
+                ghostPoints = pts
+                // File mode: ghost time 0 = file start; mic mode: ghost starts at current virtual time
+                ghostOffsetMs = if (isFileMode) 0L else currentTimeMs
+                isGhostLoading = false
+            }
         }
     }
 
@@ -522,8 +547,26 @@ private fun VocalAppRoot(
                             currentTimeMsProvider = { currentTimeMs },
                             scrollOffsetMs = pauseScrollOffsetMs,
                             isPaused = isAnalysisPaused,
+                            ghostPointsProvider = if (ghostPoints.isNotEmpty()) { { ghostPoints } } else null,
+                            ghostOffsetMs = ghostOffsetMs,
                             modifier = Modifier.fillMaxSize()
                         )
+                        // Ghost loading progress (small bottom bar)
+                        if (isGhostLoading) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 90.dp)
+                                    .background(Color(0xCC000000), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    "Загрузка призрака… ${"%.0f".format(ghostLoadProgress * 100)}%",
+                                    color = Color(0xFFFF9800),
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
                         AnalysisOverlay(
                             noteName = audioFrame.noteName,
                             frequency = audioFrame.frequency,
@@ -651,6 +694,27 @@ private fun VocalAppRoot(
                     contentDescription = "Загрузить аудиофайл",
                     tint = if (isFileMode) Color(0xFF00E5FF) else Color(0xFF666666)
                 )
+            }
+            // Ghost button — visible only in analysis mode
+            if (isAnalysisMode) {
+                IconButton(onClick = {
+                    if (ghostPoints.isNotEmpty()) {
+                        // Clear ghost on second tap
+                        ghostPoints = emptyList()
+                    } else {
+                        ghostPicker.launch("audio/*")
+                    }
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = "Призрак",
+                        tint = when {
+                            isGhostLoading     -> Color(0xFFFF9800)
+                            ghostPoints.isNotEmpty() -> Color(0xFFFF9800)
+                            else               -> Color(0xFF666666)
+                        }
+                    )
+                }
             }
         }
 

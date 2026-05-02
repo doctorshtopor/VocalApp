@@ -45,6 +45,9 @@ data class PitchPoint(
     val midi: Float
 )
 
+/** A single pitch sample extracted from a reference (ghost) audio source. */
+data class GhostPoint(val timeMs: Long, val midi: Float)
+
 /** A contiguous run of pitch samples that belong to the same note. */
 data class NoteBlock(
     val startMs: Long,
@@ -56,7 +59,7 @@ data class NoteBlock(
 /** Settings specific to the pitch / note analysis mode. */
 data class AnalysisSettings(
     /** Signals below this level (dBFS) are treated as silence — pitch is not detected. */
-    val noiseGateDb: Float = -40f,
+    val noiseGateDb: Float = -28f,
     /** How many minutes of pitch history to keep for scroll-back while paused. */
     val historyWindowMinutes: Float = 2f
 )
